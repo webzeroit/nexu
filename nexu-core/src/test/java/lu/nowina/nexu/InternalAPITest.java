@@ -15,14 +15,21 @@ package lu.nowina.nexu;
 
 import static org.mockito.Mockito.mock;
 
+import java.io.File;
 import java.util.Arrays;
 import java.util.List;
 
 import lu.nowina.nexu.api.AppConfig;
+import lu.nowina.nexu.api.Arch;
+import lu.nowina.nexu.api.NexuAPI;
 import lu.nowina.nexu.api.ProductAdapter;
 import lu.nowina.nexu.api.DetectedCard;
 import lu.nowina.nexu.api.EnvironmentInfo;
 import lu.nowina.nexu.api.Match;
+import lu.nowina.nexu.api.ScAPI;
+import lu.nowina.nexu.generic.ConnectionInfo;
+import lu.nowina.nexu.generic.SCDatabase;
+import lu.nowina.nexu.generic.SCInfo;
 import lu.nowina.nexu.view.core.UIDisplay;
 
 import org.junit.Assert;
@@ -116,6 +123,118 @@ public class InternalAPITest {
 
 		Assert.assertEquals(1, matches.size());
 
+	}
+
+	@Test
+	public void testMatchingProductAdaptersRemovesStalePkcs11Mapping() throws Exception {
+
+		final SCDatabase db = new SCDatabase();
+		final File missingDll = new File(System.getProperty("java.io.tmpdir"),
+				"nexu-test-missing-" + System.nanoTime() + ".dll");
+		Assert.assertFalse(missingDll.exists());
+		db.add("ATR-STALE", buildConnectionInfo(ScAPI.PKCS_11, missingDll.getAbsolutePath()));
+
+		InternalAPI api = new InternalAPI(mock(UIDisplay.class), db, null, null, null, mock(AppConfig.class));
+
+		final List<Match> matches = api.matchingProductAdapters(new DetectedCard("ATR-STALE", 0));
+
+		// The stale mapping is removed, so the card is not matched and the next request
+		// misses the database lookup and re-enters advanced creation.
+		Assert.assertEquals(0, matches.size());
+		Assert.assertNull(db.getInfo("ATR-STALE"));
+	}
+
+	@Test
+	public void testMatchingProductAdaptersKeepsExistingPkcs11Mapping() throws Exception {
+
+		final SCDatabase db = new SCDatabase();
+		final File dll = File.createTempFile("nexu-test-existing-", ".dll");
+		dll.deleteOnExit();
+		db.add("ATR-OK", buildConnectionInfo(ScAPI.PKCS_11, dll.getAbsolutePath()));
+
+		InternalAPI api = new InternalAPI(mock(UIDisplay.class), db, null, null, null, mock(AppConfig.class));
+
+		final List<Match> matches = api.matchingProductAdapters(new DetectedCard("ATR-OK", 0));
+
+		Assert.assertEquals(1, matches.size());
+		Assert.assertEquals(1, db.getInfo("ATR-OK").getInfos().size());
+	}
+
+	@Test
+	public void testMatchingProductAdaptersKeepsNonMatchingEntries() throws Exception {
+
+		final SCDatabase db = new SCDatabase();
+		final File missingDll = new File(System.getProperty("java.io.tmpdir"),
+				"nexu-test-missing-" + System.nanoTime() + ".dll");
+		Assert.assertFalse(missingDll.exists());
+		db.add("ATR-MIX", buildConnectionInfo(ScAPI.PKCS_11, missingDll.getAbsolutePath()));
+
+		// MSCAPI entries (null apiParam) are never considered stale.
+		db.add("ATR-MIX", buildConnectionInfo(ScAPI.MSCAPI, null));
+
+		// A PKCS#11 entry for a different environment is not considered on this machine.
+		final EnvironmentInfo otherEnv = EnvironmentInfo.buildFromSystemProperties(System.getProperties());
+		otherEnv.setArch(otherEnv.getArch() == Arch.X86 ? Arch.AMD64 : Arch.X86);
+		final ConnectionInfo otherEnvCInfo = buildConnectionInfo(ScAPI.PKCS_11, missingDll.getAbsolutePath());
+		otherEnvCInfo.setEnv(otherEnv);
+		db.add("ATR-MIX", otherEnvCInfo);
+
+		InternalAPI api = new InternalAPI(mock(UIDisplay.class), db, null, null, null, mock(AppConfig.class));
+
+		final List<Match> matches = api.matchingProductAdapters(new DetectedCard("ATR-MIX", 0));
+
+		// Only the stale entry for the current environment is removed.
+		Assert.assertEquals(1, matches.size());
+		Assert.assertEquals(2, db.getInfo("ATR-MIX").getInfos().size());
+	}
+
+	@Test
+	public void testStore() throws Exception {
+
+		final SCDatabase db = new SCDatabase();
+		InternalAPI api = new InternalAPI(mock(UIDisplay.class), db, null, null, null, mock(AppConfig.class));
+
+		// store is part of the public NexuAPI contract.
+		final NexuAPI publicApi = api;
+		publicApi.store("ATR-STORED", ScAPI.PKCS_11, "C:\\Program Files\\middleware\\pkcs11.dll");
+
+		final SCInfo info = db.getInfo("ATR-STORED");
+		Assert.assertNotNull(info);
+		Assert.assertEquals(1, info.getInfos().size());
+		final ConnectionInfo stored = info.getInfos().get(0);
+		Assert.assertEquals(ScAPI.PKCS_11, stored.getSelectedApi());
+		Assert.assertEquals("C:\\Program Files\\middleware\\pkcs11.dll", stored.getApiParam());
+		Assert.assertEquals(api.getEnvironmentInfo(), stored.getEnv());
+
+		// Storing the same selection again is deduplicated.
+		publicApi.store("ATR-STORED", ScAPI.PKCS_11, "C:\\Program Files\\middleware\\pkcs11.dll");
+		Assert.assertEquals(1, db.getInfo("ATR-STORED").getInfos().size());
+	}
+
+	@Test
+	public void testRemoveConnectionInfo() throws Exception {
+
+		final SCDatabase db = new SCDatabase();
+		InternalAPI api = new InternalAPI(mock(UIDisplay.class), db, null, null, null, mock(AppConfig.class));
+
+		api.store("ATR-REMOVE", ScAPI.PKCS_11, "C:\\middleware\\pkcs11.dll");
+		api.store("ATR-REMOVE", ScAPI.MSCAPI, null);
+
+		api.removeConnectionInfo("ATR-REMOVE", ScAPI.PKCS_11, "C:\\middleware\\pkcs11.dll");
+		Assert.assertEquals(1, db.getInfo("ATR-REMOVE").getInfos().size());
+		Assert.assertEquals(ScAPI.MSCAPI, db.getInfo("ATR-REMOVE").getInfos().get(0).getSelectedApi());
+
+		// Removing an unknown mapping is a no-op.
+		api.removeConnectionInfo("ATR-REMOVE", ScAPI.PKCS_11, "C:\\middleware\\other.dll");
+		Assert.assertEquals(1, db.getInfo("ATR-REMOVE").getInfos().size());
+	}
+
+	private static ConnectionInfo buildConnectionInfo(ScAPI api, String apiParam) {
+		final ConnectionInfo cInfo = new ConnectionInfo();
+		cInfo.setSelectedApi(api);
+		cInfo.setApiParam(apiParam);
+		cInfo.setEnv(EnvironmentInfo.buildFromSystemProperties(System.getProperties()));
+		return cInfo;
 	}
 
 }

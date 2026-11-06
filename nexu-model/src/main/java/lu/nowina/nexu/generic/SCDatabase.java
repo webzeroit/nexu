@@ -16,6 +16,7 @@ package lu.nowina.nexu.generic;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 
 import javax.xml.bind.annotation.XmlAccessType;
 import javax.xml.bind.annotation.XmlAccessorType;
@@ -42,8 +43,10 @@ public class SCDatabase implements ProductDatabase {
 	private DatabaseEventHandler onAddAction;
 
 	/**
-	 * Add a new ConnectionInfo to the database, associated with the ATR
-	 * 
+	 * Add a new ConnectionInfo to the database, associated with the ATR.
+	 * Nothing is added (nor saved) when a ConnectionInfo with the same selectedApi,
+	 * apiParam and env is already stored for the ATR.
+	 *
 	 * @param detectedAtr
 	 * @param cInfo
 	 */
@@ -54,8 +57,57 @@ public class SCDatabase implements ProductDatabase {
 			info.setAtr(detectedAtr);
 			getSmartcards0().add(info);
 		}
+		if (indexOf(info.getInfos(), cInfo) >= 0) {
+			logger.info("ConnectionInfo for ATR " + detectedAtr + " already stored, skipping duplicate");
+			return;
+		}
 		info.getInfos().add(cInfo);
 		onAdd();
+	}
+
+	/**
+	 * Remove a ConnectionInfo from the database, associated with the ATR.
+	 * Best-effort and non-fatal: if no other ConnectionInfo remains for the ATR, the whole
+	 * SCInfo entry is removed, so the next lookup misses the database and re-enters
+	 * advanced creation.
+	 *
+	 * @param detectedAtr
+	 * @param cInfo the ConnectionInfo to remove (matched by selectedApi, apiParam and env)
+	 * @return true if a ConnectionInfo has been removed
+	 */
+	public boolean removeConnectionInfo(String detectedAtr, ConnectionInfo cInfo) {
+		try {
+			final SCInfo info = getInfo(detectedAtr);
+			if (info == null) {
+				return false;
+			}
+			final int index = indexOf(info.getInfos(), cInfo);
+			if (index < 0) {
+				return false;
+			}
+			info.getInfos().remove(index);
+			if (info.getInfos().isEmpty()) {
+				getSmartcards0().remove(info);
+			}
+			onAdd();
+			logger.info("ConnectionInfo for ATR " + detectedAtr + " removed from the personal database");
+			return true;
+		} catch (final Exception e) {
+			logger.warn("Cannot remove ConnectionInfo for ATR " + detectedAtr + " from the personal database", e);
+			return false;
+		}
+	}
+
+	private static int indexOf(List<ConnectionInfo> infos, ConnectionInfo cInfo) {
+		for (int i = 0; i < infos.size(); i++) {
+			final ConnectionInfo existing = infos.get(i);
+			if ((existing.getSelectedApi() == cInfo.getSelectedApi())
+					&& Objects.equals(existing.getApiParam(), cInfo.getApiParam())
+					&& Objects.equals(existing.getEnv(), cInfo.getEnv())) {
+				return i;
+			}
+		}
+		return -1;
 	}
 
 	private void onAdd() {

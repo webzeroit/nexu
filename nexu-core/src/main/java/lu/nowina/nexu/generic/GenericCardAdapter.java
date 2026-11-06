@@ -92,6 +92,13 @@ public class GenericCardAdapter extends AbstractCardProductAdapter {
                 return new MSCAPISignatureToken();
             case PKCS_11:
                 final String absolutePath = cInfo.getApiParam();
+                if ((absolutePath == null) || !new File(absolutePath).isFile()) {
+                    // Stale mapping (e.g. middleware reinstalled to another location): do not
+                    // propagate the native load failure, return null (-> NO_TOKEN) instead
+                    logger.warn("Stored PKCS#11 library '" + absolutePath + "' for card " + card.getAtr()
+                            + " does not exist on this machine, not loading it; re-run advanced creation to re-select the DLL");
+                    return null;
+                }
                 return new Pkcs11SignatureTokenAdapter(new File(absolutePath), callback, card.getTerminalIndex());
             case MOCCA:
                 return new MOCCASignatureTokenConnectionAdapter(new MOCCASignatureTokenConnection(callback), api, card);

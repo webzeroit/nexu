@@ -55,7 +55,17 @@ public interface NexuAPI {
 	Execution<GetIdentityInfoResponse> getIdentityInfo(GetIdentityInfoRequest request);
 	
 	Execution<AuthenticateResponse> authenticate(AuthenticateRequest request);
-	
+
+	/**
+	 * Persists a verified ATR→API(→DLL) mapping so the same card is auto-resolved on the next run;
+	 * no-op when no local database is configured.
+	 *
+	 * @param detectedAtr the ATR of the detected card
+	 * @param selectedApi the API selected to connect the card
+	 * @param apiParam the API specific parameter (e.g. the PKCS#11 DLL path), may be null (e.g. for MSCAPI)
+	 */
+	void store(String detectedAtr, ScAPI selectedApi, String apiParam);
+
 	AppConfig getAppConfig();
 	
 	HttpPlugin getHttpPlugin(String pluginId);

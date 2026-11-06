@@ -46,7 +46,7 @@ public class ConnectionInfo {
 	}
 
 	public String getApiParam() {
-		return apiParam.trim();
+		return (apiParam == null) ? null : apiParam.trim();
 	}
 
 	public void setApiParam(String apiParam) {

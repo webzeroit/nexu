@@ -16,14 +16,20 @@ package lu.nowina.nexu.flow;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import java.io.InputStream;
+import java.security.KeyStore;
 import java.security.KeyStore.PasswordProtection;
+import java.security.cert.X509Certificate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Assert;
 import org.junit.Rule;
@@ -32,6 +38,8 @@ import org.junit.rules.TemporaryFolder;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
+import eu.europa.esig.dss.model.x509.CertificateToken;
+import eu.europa.esig.dss.token.DSSPrivateKeyEntry;
 import eu.europa.esig.dss.token.JKSSignatureToken;
 import eu.europa.esig.dss.token.PrefilledPasswordCallback;
 import eu.europa.esig.dss.token.SignatureTokenConnection;
@@ -55,11 +63,16 @@ import lu.nowina.nexu.api.flow.NoOpFutureOperationInvocation;
 import lu.nowina.nexu.api.flow.Operation;
 import lu.nowina.nexu.api.flow.OperationFactory;
 import lu.nowina.nexu.api.flow.OperationResult;
+import lu.nowina.nexu.flow.operation.AdvancedCreationFeedbackOperation;
 import lu.nowina.nexu.flow.operation.BasicOperationFactory;
 import lu.nowina.nexu.flow.operation.ConfigureProductOperation;
 import lu.nowina.nexu.flow.operation.CoreOperationStatus;
 import lu.nowina.nexu.flow.operation.CreateTokenOperation;
 import lu.nowina.nexu.flow.operation.GetMatchingProductAdaptersOperation;
+import lu.nowina.nexu.flow.operation.GetTokenConnectionOperation;
+import lu.nowina.nexu.flow.operation.SaveProductOperation;
+import lu.nowina.nexu.flow.operation.SelectPrivateKeyOperation;
+import lu.nowina.nexu.flow.operation.TokenOperationResultKey;
 import lu.nowina.nexu.keystore.KeystoreProductAdapter;
 import lu.nowina.nexu.view.core.UIDisplay;
 import lu.nowina.nexu.view.core.UIOperation;
@@ -210,6 +223,109 @@ public class GetCertificateFlowTest extends AbstractConfigureLoggerTest {
         Assert.assertNotNull(resp);
         Assert.assertFalse(resp.isSuccess());
         Assert.assertEquals(CoreOperationStatus.UNSUPPORTED_PRODUCT.getCode(), resp.getError());
+    }
+
+    /**
+     * In headless mode (no pop-ups), a successful advanced creation must persist the
+     * selected ATR→API(→DLL) mapping, since no confirmation dialog is shown to the user.
+     */
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testHeadlessAdvancedCreationStoresMapping() throws Exception {
+        final UIDisplay display = mock(UIDisplay.class);
+
+        final NexuAPI api = mock(NexuAPI.class);
+        final DetectedCard detectedCard = new DetectedCard("atr", 0);
+        when(api.detectCards()).thenReturn(Arrays.asList(detectedCard));
+
+        final AppConfig appConfig = new AppConfig();
+        appConfig.setEnablePopUps(false);
+        when(api.getAppConfig()).thenReturn(appConfig);
+
+        // A real certificate from the test keystore: the flow computes the key id from it.
+        final KeyStore keyStore = KeyStore.getInstance("JKS");
+        try (InputStream in = this.getClass().getResourceAsStream("/keystore.jks")) {
+            keyStore.load(in, "password".toCharArray());
+        }
+        final X509Certificate x509Certificate = (X509Certificate) keyStore
+                .getCertificate(keyStore.aliases().nextElement());
+        final CertificateToken certificate = new CertificateToken(x509Certificate);
+
+        final DSSPrivateKeyEntry key = mock(DSSPrivateKeyEntry.class);
+        when(key.getCertificate()).thenReturn(certificate);
+
+        final SignatureTokenConnection token = mock(SignatureTokenConnection.class);
+        final TokenId tokenId = new TokenId("id");
+        final String dllPath = "C:\\middleware\\pkcs11.dll";
+        final ProductAdapter productAdapter = mock(ProductAdapter.class);
+
+        final Map<TokenOperationResultKey, Object> createTokenResult = new HashMap<>();
+        createTokenResult.put(TokenOperationResultKey.TOKEN_ID, tokenId);
+        createTokenResult.put(TokenOperationResultKey.ADVANCED_CREATION, Boolean.TRUE);
+        createTokenResult.put(TokenOperationResultKey.SELECTED_PRODUCT, detectedCard);
+        createTokenResult.put(TokenOperationResultKey.SELECTED_PRODUCT_ADAPTER, productAdapter);
+        createTokenResult.put(TokenOperationResultKey.SELECTED_API, ScAPI.PKCS_11);
+        createTokenResult.put(TokenOperationResultKey.SELECTED_API_PARAMS, dllPath);
+
+        final OperationFactory operationFactory = mock(OperationFactory.class);
+
+        final Operation<Product> selectProductOperation = mock(Operation.class);
+        when(selectProductOperation.perform()).thenReturn(new OperationResult<Product>(detectedCard));
+        when(operationFactory.getOperation(eq(UIOperation.class), eq("/fxml/product-selection.fxml"),
+                any(Object[].class))).thenReturn(selectProductOperation);
+
+        final Operation<List<Match>> getMatchingCardAdaptersOperation = mock(Operation.class);
+        when(getMatchingCardAdaptersOperation.perform())
+        .thenReturn(new OperationResult<List<Match>>(Collections.emptyList()));
+        when(operationFactory.getOperation(GetMatchingProductAdaptersOperation.class, Arrays.asList(detectedCard), api))
+        .thenReturn(getMatchingCardAdaptersOperation);
+
+        final Operation<List<Match>> configureProductOperation = mock(Operation.class);
+        when(configureProductOperation.perform()).thenReturn(new OperationResult<List<Match>>(Collections.emptyList()));
+        when(operationFactory.getOperation(ConfigureProductOperation.class, Collections.emptyList(), api))
+        .thenReturn(configureProductOperation);
+
+        final Operation<Map<TokenOperationResultKey, Object>> createTokenOperation = mock(Operation.class);
+        when(createTokenOperation.perform()).thenReturn(new OperationResult<Map<TokenOperationResultKey, Object>>(createTokenResult));
+        when(operationFactory.getOperation(CreateTokenOperation.class, api, Collections.emptyList()))
+        .thenReturn(createTokenOperation);
+
+        final Operation<SignatureTokenConnection> getTokenConnectionOperation = mock(Operation.class);
+        when(getTokenConnectionOperation.perform()).thenReturn(new OperationResult<SignatureTokenConnection>(token));
+        when(operationFactory.getOperation(GetTokenConnectionOperation.class, api, tokenId))
+        .thenReturn(getTokenConnectionOperation);
+
+        final GetCertificateRequest req = new GetCertificateRequest();
+        final Operation<DSSPrivateKeyEntry> selectPrivateKeyOperation = mock(Operation.class);
+        when(selectPrivateKeyOperation.perform()).thenReturn(new OperationResult<DSSPrivateKeyEntry>(key));
+        when(operationFactory.getOperation(SelectPrivateKeyOperation.class, token, api, detectedCard,
+                productAdapter, (Object) req.getCertificateFilter()))
+        .thenReturn(selectPrivateKeyOperation);
+
+        final Operation<Void> feedbackOperation = mock(Operation.class);
+        when(feedbackOperation.perform()).thenReturn(new OperationResult<Void>(BasicOperationStatus.SUCCESS));
+        when(operationFactory.getOperation(AdvancedCreationFeedbackOperation.class, api, createTokenResult))
+        .thenReturn(feedbackOperation);
+
+        final Operation<Boolean> saveProductOperation = mock(Operation.class);
+        when(saveProductOperation.perform()).thenReturn(new OperationResult<Boolean>(Boolean.TRUE));
+        when(operationFactory.getOperation(SaveProductOperation.class, productAdapter, detectedCard, api))
+        .thenReturn(saveProductOperation);
+
+        final GetCertificateFlow flow = new GetCertificateFlow(display, api);
+        flow.setOperationFactory(operationFactory);
+
+        final Execution<GetCertificateResponse> resp = flow.process(api, req);
+
+        Assert.assertNotNull(resp);
+        Assert.assertTrue(resp.isSuccess());
+        Assert.assertNotNull(resp.getResponse());
+        Assert.assertEquals(certificate, resp.getResponse().getCertificate());
+        Assert.assertEquals(certificate.getDSSIdAsString(), resp.getResponse().getKeyId());
+        Assert.assertEquals(tokenId, resp.getResponse().getTokenId());
+
+        // The learned mapping must be stored even though no dialog was shown (headless mode).
+        verify(api).store("atr", ScAPI.PKCS_11, dllPath);
     }
 
     @Test

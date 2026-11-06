@@ -15,18 +15,19 @@ package lu.nowina.nexu.flow.operation;
 
 import java.util.Map;
 
-import lu.nowina.nexu.InternalAPI;
 import lu.nowina.nexu.api.DetectedCard;
 import lu.nowina.nexu.api.Feedback;
 import lu.nowina.nexu.api.FeedbackStatus;
 import lu.nowina.nexu.api.NexuAPI;
 import lu.nowina.nexu.api.ScAPI;
-import lu.nowina.nexu.api.flow.BasicOperationStatus;
 import lu.nowina.nexu.api.flow.OperationResult;
 import lu.nowina.nexu.view.core.UIOperation;
 
 /**
- * This {@link CompositeOperation} allows to provide some feedback in case of advanced creation.
+ * This {@link CompositeOperation} allows to provide some (informational) feedback in case of
+ * advanced creation. The ATR→API(→DLL) mapping is persisted unconditionally by the flow
+ * (GetCertificateFlow) as soon as the key selection has proven the selection valid, so this
+ * operation only displays the confirmation dialog and never stores anything itself.
  *
  * Expected parameters:
  * <ol>
@@ -69,17 +70,10 @@ public class AdvancedCreationFeedbackOperation extends AbstractCompositeOperatio
             if ((feedback.getSelectedCard() != null) && (feedback.getSelectedAPI() != null) &&
                     ((feedback.getSelectedAPI() == ScAPI.MOCCA) || (feedback.getSelectedAPI() == ScAPI.MSCAPI) ||
                             (feedback.getApiParameter() != null))) {
-                final OperationResult<Feedback> result =
-                        this.operationFactory.getOperation(UIOperation.class, "/fxml/store-result.fxml",
-                                new Object[]{feedback, this.api.getAppConfig().getServerUrl(), this.api.getAppConfig().getApplicationVersion(),
-                                        this.api.getAppConfig().getApplicationName(), this.api.getAppConfig()}).perform();
-                if(result.getStatus().equals(BasicOperationStatus.SUCCESS)) {
-                    final Feedback back = result.getResult();
-                    if (back != null) {
-                        ((InternalAPI) this.api).store(back.getSelectedCard().getAtr(),
-                                back.getSelectedAPI(), back.getApiParameter());
-                    }
-                }
+                // Purely informational: the mapping has already been persisted by the flow
+                this.operationFactory.getOperation(UIOperation.class, "/fxml/store-result.fxml",
+                        new Object[]{feedback, this.api.getAppConfig().getServerUrl(), this.api.getAppConfig().getApplicationVersion(),
+                                this.api.getAppConfig().getApplicationName(), this.api.getAppConfig()}).perform();
             }
         }
         return new OperationResult<Void>((Void) null);

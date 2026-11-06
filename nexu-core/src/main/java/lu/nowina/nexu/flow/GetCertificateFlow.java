@@ -32,6 +32,7 @@ import lu.nowina.nexu.api.Match;
 import lu.nowina.nexu.api.NexuAPI;
 import lu.nowina.nexu.api.Product;
 import lu.nowina.nexu.api.ProductAdapter;
+import lu.nowina.nexu.api.ScAPI;
 import lu.nowina.nexu.api.TokenId;
 import lu.nowina.nexu.api.flow.BasicOperationStatus;
 import lu.nowina.nexu.api.flow.Operation;
@@ -128,6 +129,10 @@ class GetCertificateFlow extends AbstractCoreFlow<GetCertificateRequest, GetCert
     								final DSSPrivateKeyEntry key = selectPrivateKeyOperationResult.getResult();
 
     								if ((Boolean) map.get(TokenOperationResultKey.ADVANCED_CREATION)) {
+    									// The key selection has proven the advanced selection is valid, so the
+    									// mapping is persisted unconditionally (also in headless mode, where no
+    									// confirmation dialog is shown)
+    									this.persistAdvancedSelection(api, map);
     									this.getOperationFactory().getOperation(AdvancedCreationFeedbackOperation.class, api, map).perform();
     								}
 
@@ -195,6 +200,27 @@ class GetCertificateFlow extends AbstractCoreFlow<GetCertificateRequest, GetCert
     	}
     }
     
+	/**
+	 * Persists the ATR→API(→DLL) mapping selected during an advanced creation. The
+	 * selection has already been proven valid by the key selection, so the mapping is
+	 * stored regardless of whether a confirmation dialog has been shown (headless mode).
+	 *
+	 * @param api the API
+	 * @param map the map returned by {@link CreateTokenOperation}
+	 */
+	private void persistAdvancedSelection(final NexuAPI api, final Map<TokenOperationResultKey, Object> map) {
+		final Product selectedProduct = (Product) map.get(TokenOperationResultKey.SELECTED_PRODUCT);
+		final ScAPI selectedApi = (ScAPI) map.get(TokenOperationResultKey.SELECTED_API);
+		final String apiParam = (String) map.get(TokenOperationResultKey.SELECTED_API_PARAMS);
+		if ((selectedProduct instanceof DetectedCard) && (selectedApi != null)
+				&& ((selectedApi == ScAPI.MOCCA) || (selectedApi == ScAPI.MSCAPI) || (apiParam != null))) {
+			api.store(((DetectedCard) selectedProduct).getAtr(), selectedApi, apiParam);
+		} else {
+			logger.info("Advanced creation not persisted: product=" + selectedProduct
+					+ ", api=" + selectedApi + ", apiParam=" + apiParam);
+		}
+	}
+
 	private Execution<GetCertificateResponse> handleErrorOperationResult2(final OperationResult<?> operationResult) throws Exception {
 		bShouldLogoutCompletely = true;
         return super.handleErrorOperationResult(operationResult);

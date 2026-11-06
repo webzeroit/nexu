@@ -13,6 +13,7 @@
  */
 package lu.nowina.nexu;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -151,11 +152,45 @@ public class InternalAPI implements NexuAPI {
 				if (info == null) {
 					logger.warn("Card " + d.getAtr() + " is not in the personal database");
 				} else {
-					matches.add(new Match(new GenericCardAdapter(info), d));
+					removeStaleConnectionInfos(d, info);
+					if (info.getInfos().isEmpty()) {
+						logger.warn("Card " + d.getAtr() + " has no usable connection info in the personal database, "
+								+ "advanced creation will be required");
+					} else {
+						matches.add(new Match(new GenericCardAdapter(info), d));
+					}
 				}
 			}
 		}
 		return matches;
+	}
+
+	/**
+	 * Self-healing for stale PKCS#11 mappings: the stored DLL path is absolute and
+	 * machine-specific, so if the middleware has been reinstalled (or the card moved to
+	 * another machine) the library may no longer exist. Any ConnectionInfo for the current
+	 * environment pointing to a missing library is removed on a best-effort basis, so the
+	 * next request misses the database lookup and re-enters advanced creation.
+	 *
+	 * @param card the detected card
+	 * @param info the SCInfo from the personal database
+	 */
+	private void removeStaleConnectionInfos(final DetectedCard card, final SCInfo info) {
+		final EnvironmentInfo env = getEnvironmentInfo();
+		final List<ConnectionInfo> stale = new ArrayList<>();
+		for (final ConnectionInfo cInfo : info.getInfos()) {
+			if ((cInfo.getSelectedApi() == ScAPI.PKCS_11) && (cInfo.getEnv() != null) && cInfo.getEnv().matches(env)) {
+				final String apiParam = cInfo.getApiParam();
+				if ((apiParam == null) || !new File(apiParam).isFile()) {
+					stale.add(cInfo);
+				}
+			}
+		}
+		for (final ConnectionInfo cInfo : stale) {
+			logger.warn("Stored PKCS#11 library '" + cInfo.getApiParam() + "' for card " + card.getAtr()
+					+ " does not exist on this machine, removing the stale mapping");
+			myDatabase.removeConnectionInfo(card.getAtr(), cInfo);
+		}
 	}
 
 	@Override
@@ -276,6 +311,7 @@ public class InternalAPI implements NexuAPI {
 		httpPlugins.put(context, plugin);
 	}
 
+	@Override
 	public void store(String detectedAtr, ScAPI selectedApi, String apiParam) {
 		if (myDatabase != null) {
 
@@ -286,6 +322,26 @@ public class InternalAPI implements NexuAPI {
 			cInfo.setApiParam(apiParam);
 
 			myDatabase.add(detectedAtr, cInfo);
+		}
+	}
+
+	/**
+	 * Removes a stored ATR→API(→DLL) mapping from the local database (e.g. when the stored
+	 * PKCS#11 DLL no longer exists on this machine). Best-effort and non-fatal; no-op when
+	 * no local database is configured.
+	 *
+	 * @param detectedAtr the ATR of the detected card
+	 * @param selectedApi the API of the stored mapping
+	 * @param apiParam the API specific parameter (e.g. the PKCS#11 DLL path), may be null
+	 */
+	public void removeConnectionInfo(String detectedAtr, ScAPI selectedApi, String apiParam) {
+		if (myDatabase != null) {
+			final EnvironmentInfo env = getEnvironmentInfo();
+			final ConnectionInfo cInfo = new ConnectionInfo();
+			cInfo.setSelectedApi(selectedApi);
+			cInfo.setEnv(env);
+			cInfo.setApiParam(apiParam);
+			myDatabase.removeConnectionInfo(detectedAtr, cInfo);
 		}
 	}
 

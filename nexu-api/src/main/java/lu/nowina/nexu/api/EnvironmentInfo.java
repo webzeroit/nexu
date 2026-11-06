@@ -13,6 +13,7 @@
  */
 package lu.nowina.nexu.api;
 
+import java.util.Objects;
 import java.util.Properties;
 
 import javax.xml.bind.annotation.XmlAccessType;
@@ -135,6 +136,28 @@ public class EnvironmentInfo {
 
 	public void setOsArch(String osArch) {
 		this.osArch = osArch;
+	}
+
+	@Override
+	public boolean equals(final Object obj) {
+		if (this == obj) {
+			return true;
+		}
+		if ((obj == null) || (this.getClass() != obj.getClass())) {
+			return false;
+		}
+		final EnvironmentInfo other = (EnvironmentInfo) obj;
+		return Objects.equals(this.jreVendor, other.jreVendor)
+				&& Objects.equals(this.osName, other.osName)
+				&& Objects.equals(this.osArch, other.osArch)
+				&& Objects.equals(this.osVersion, other.osVersion)
+				&& (this.arch == other.arch)
+				&& (this.os == other.os);
+	}
+
+	@Override
+	public int hashCode() {
+		return Objects.hash(this.jreVendor, this.osName, this.osArch, this.osVersion, this.arch, this.os);
 	}
 
 }
